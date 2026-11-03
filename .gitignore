@@ -17,3 +17,8 @@ Plugins/*/Intermediate/
 *.sdf
 *.suo
 *.user
+
+# Claude Code
+CLAUDE.md
+CLAUDE.local.md
+.claude/
