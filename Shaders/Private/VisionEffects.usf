@@ -1,0 +1,233 @@
+// Image processing passes of the eye diseases simulator.
+// C++ side: Source/VisionShaders/Private/VisionImageProcessing.cpp
+//
+// Pipeline for one camera frame:
+//   DownsamplePS   - box filter to 1/2^n resolution (+ optional bright-pass for glare)
+//   GaussianBlurPS - separable Gaussian convolution, run once horizontally and once vertically
+//   CompositePS    - per-pixel operations: blur mixing masks, glare, 3x3 color matrix, haze, contrast,
+//                    peripheral vignette, central scotoma, metamorphopsia distortion, noise blotches
+//
+// All color math is done in linear RGB.
+
+#include "/Engine/Public/Platform.ush"
+
+#ifndef NUM_BLUR_WEIGHT_VECTORS
+#define NUM_BLUR_WEIGHT_VECTORS 5
+#endif
+
+static const float3 LuminanceWeights = float3(0.2126, 0.7152, 0.0722); // Rec. 709
+
+// ---------------------------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------------------------
+
+// Exact sRGB electro-optical transfer function (IEC 61966-2-1).
+float3 DecodeSRGB(float3 Encoded)
+{
+	float3 Low = Encoded / 12.92;
+	float3 High = pow((max(Encoded, 0.0) + 0.055) / 1.055, 2.4);
+	return lerp(Low, High, step(0.04045, Encoded));
+}
+
+// Cheap 2D hash in [0, 1) without sin(), stable on half-precision mobile GPUs.
+float Hash21(float2 P)
+{
+	P = frac(P * float2(123.34, 456.21));
+	P += dot(P, P + 45.32);
+	return frac(P.x * P.y);
+}
+
+// Value noise: random values on an integer lattice, smoothly interpolated (smoothstep weights).
+float ValueNoise(float2 P)
+{
+	float2 Cell = floor(P);
+	float2 F = frac(P);
+	float2 U = F * F * (3.0 - 2.0 * F);
+
+	float A = Hash21(Cell);
+	float B = Hash21(Cell + float2(1.0, 0.0));
+	float C = Hash21(Cell + float2(0.0, 1.0));
+	float D = Hash21(Cell + float2(1.0, 1.0));
+	return lerp(lerp(A, B, U.x), lerp(C, D, U.x), U.y);
+}
+
+// Fractal Brownian motion: 4 octaves of value noise, each with double frequency and half amplitude.
+float Fbm(float2 P)
+{
+	float Sum = 0.0;
+	float Amplitude = 0.5;
+	for (int Octave = 0; Octave < 4; ++Octave)
+	{
+		Sum += Amplitude * ValueNoise(P);
+		P = P * 2.03 + 17.0;
+		Amplitude *= 0.5;
+	}
+	return Sum / 0.9375; // normalize to ~[0, 1]
+}
+
+// ---------------------------------------------------------------------------------------------
+// DownsamplePS
+// ---------------------------------------------------------------------------------------------
+
+Texture2D SourceTexture;
+SamplerState SourceSampler;
+float2 OutputInvSize;
+float BrightThreshold;     // < 0 disables the bright-pass
+uint bDecodeSourceSRGB;
+
+float3 SampleSource(float2 UV)
+{
+	float3 Color = SourceTexture.SampleLevel(SourceSampler, UV, 0).rgb;
+	return bDecodeSourceSRGB != 0 ? DecodeSRGB(Color) : Color;
+}
+
+void DownsamplePS(float4 SvPosition : SV_POSITION, out float4 OutColor : SV_Target0)
+{
+	float2 UV = SvPosition.xy * OutputInvSize;
+
+	// Four bilinear taps a quarter of an output texel from the center: average of the covered source texels.
+	float2 Offset = 0.25 * OutputInvSize;
+	float3 Color = 0.25 * (
+		SampleSource(UV + float2(-Offset.x, -Offset.y)) +
+		SampleSource(UV + float2( Offset.x, -Offset.y)) +
+		SampleSource(UV + float2(-Offset.x,  Offset.y)) +
+		SampleSource(UV + float2( Offset.x,  Offset.y)));
+
+	if (BrightThreshold >= 0.0)
+	{
+		// Soft bright-pass: keep the color in proportion to how far its luminance exceeds the threshold.
+		float Luminance = dot(Color, LuminanceWeights);
+		Color *= saturate((Luminance - BrightThreshold) / max(1.0 - BrightThreshold, 1e-3));
+	}
+
+	OutColor = float4(Color, 1.0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// GaussianBlurPS - one dimension of a separable convolution:
+//   Out(x) = w0 * In(x) + sum_{i=1..R} w_i * (In(x + i*d) + In(x - i*d))
+// ---------------------------------------------------------------------------------------------
+
+Texture2D BlurSourceTexture;
+SamplerState BlurSourceSampler;
+float2 BlurInvSize;
+float2 BlurTexelStep;      // one texel along the blur direction, in UV units
+float4 BlurWeights[NUM_BLUR_WEIGHT_VECTORS];
+uint BlurRadius;
+
+float GetBlurWeight(uint Index)
+{
+	return BlurWeights[Index >> 2][Index & 3];
+}
+
+void GaussianBlurPS(float4 SvPosition : SV_POSITION, out float4 OutColor : SV_Target0)
+{
+	float2 UV = SvPosition.xy * BlurInvSize;
+
+	float3 Sum = BlurSourceTexture.SampleLevel(BlurSourceSampler, UV, 0).rgb * GetBlurWeight(0);
+	LOOP
+	for (uint Index = 1; Index <= BlurRadius; ++Index)
+	{
+		float2 Offset = BlurTexelStep * Index;
+		float3 Pair = BlurSourceTexture.SampleLevel(BlurSourceSampler, UV + Offset, 0).rgb
+		            + BlurSourceTexture.SampleLevel(BlurSourceSampler, UV - Offset, 0).rgb;
+		Sum += Pair * GetBlurWeight(Index);
+	}
+
+	OutColor = float4(Sum, 1.0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// CompositePS
+// ---------------------------------------------------------------------------------------------
+
+Texture2D InputTexture;
+SamplerState InputSampler;
+Texture2D BlurredTexture;
+SamplerState BlurredSampler;
+Texture2D GlareTexture;
+SamplerState GlareSampler;
+
+float2 CompositeInvSize;
+float AspectRatio;          // width / height
+uint bDecodeInputSRGB;
+float4 ColorRow0;           // rows of the 3x3 color matrix (xyz)
+float4 ColorRow1;
+float4 ColorRow2;
+float4 BlurMix;             // x: uniform, y: peripheral, z: central
+float4 GlareParams;         // x: intensity
+float4 HazeColorAndAmount;  // rgb: haze color, a: amount
+float4 TintAndContrast;     // rgb: tint, a: contrast
+float4 VignetteParams;      // x: inner radius, y: outer radius, z: darkness, w: brightness
+float4 ScotomaParams;       // x: radius, y: softness, z: darkness, w: distortion
+float4 SpotsParams;         // x: amount, y: darkness, z: scale, w: seed
+
+float3 SampleInput(float2 UV)
+{
+	float3 Color = InputTexture.SampleLevel(InputSampler, UV, 0).rgb;
+	return bDecodeInputSRGB != 0 ? DecodeSRGB(Color) : Color;
+}
+
+void CompositePS(float4 SvPosition : SV_POSITION, out float4 OutColor : SV_Target0)
+{
+	float2 UV = SvPosition.xy * CompositeInvSize;
+
+	// Position relative to the image center; 1.0 = top/bottom edge, aspect-corrected so circles stay round.
+	float2 P = (UV - 0.5) * float2(AspectRatio, 1.0) * 2.0;
+	float R = length(P);
+
+	float ScotomaRadius = ScotomaParams.x;
+
+	// Metamorphopsia: sinusoidal UV displacement that fades out with distance from the center (Gaussian falloff).
+	float Distortion = ScotomaParams.w;
+	if (Distortion > 0.0)
+	{
+		float FalloffRadius = max(ScotomaRadius * 3.0, 0.1);
+		float Falloff = exp(-(R * R) / (FalloffRadius * FalloffRadius));
+		float2 Wave = float2(sin(P.y * 23.0 + 1.7), sin(P.x * 19.0 + 0.3));
+		UV += Wave * Falloff * Distortion * 0.015;
+	}
+
+	float3 Sharp = SampleInput(UV);
+	float3 Blurred = BlurredTexture.SampleLevel(BlurredSampler, UV, 0).rgb;
+
+	// Blur masks: uniform, outside the vignette radius (periphery) and around the scotoma (center).
+	float Peripheral = smoothstep(VignetteParams.x, VignetteParams.y, R);
+	float Central = 1.0 - smoothstep(ScotomaRadius, ScotomaRadius * 2.5 + 0.05, R);
+	float BlurAmount = saturate(BlurMix.x + BlurMix.y * Peripheral + BlurMix.z * Central);
+	float3 Color = lerp(Sharp, Blurred, BlurAmount);
+
+	// Glare: blurred bright-pass added on top (light scattered by a cloudy lens).
+	Color += GlareTexture.SampleLevel(GlareSampler, UV, 0).rgb * GlareParams.x;
+
+	// 3x3 color matrix (color vision deficiency simulation / grayscale).
+	Color = float3(dot(ColorRow0.xyz, Color), dot(ColorRow1.xyz, Color), dot(ColorRow2.xyz, Color));
+
+	// Veiling haze, contrast around linear mid-grey, tint and brightness.
+	Color = lerp(Color, HazeColorAndAmount.rgb, HazeColorAndAmount.a);
+	Color = (Color - 0.18) * TintAndContrast.a + 0.18;
+	Color *= TintAndContrast.rgb * VignetteParams.w;
+
+	// Peripheral vision loss (tunnel vision).
+	Color *= 1.0 - VignetteParams.z * Peripheral;
+
+	// Central scotoma with an irregular, noisy edge.
+	if (ScotomaParams.z > 0.0)
+	{
+		float EdgeNoise = ValueNoise(P * 5.0 + 3.1) - 0.5;
+		float NoisyRadius = R + EdgeNoise * ScotomaRadius * 0.6;
+		float Scotoma = 1.0 - smoothstep(ScotomaRadius, ScotomaRadius + ScotomaParams.y, NoisyRadius);
+		Color *= 1.0 - ScotomaParams.z * Scotoma;
+	}
+
+	// Dark blotches: thresholded fractal noise (more amount = lower threshold = larger covered area).
+	if (SpotsParams.x > 0.0)
+	{
+		float Noise = Fbm(P * SpotsParams.z + SpotsParams.w);
+		float Threshold = lerp(0.80, 0.50, SpotsParams.x);
+		float Spot = smoothstep(Threshold, Threshold + 0.06, Noise);
+		Color *= 1.0 - SpotsParams.y * Spot;
+	}
+
+	OutColor = float4(saturate(Color), 1.0);
+}

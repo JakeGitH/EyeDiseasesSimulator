@@ -30,7 +30,15 @@ public class EyeDiseasesSimulator : ModuleRules
 			"OculusInteraction",          // ISDK: grabbable, poke, ray
 			"OculusInteractionPrebuilts", // ISDK: hand rigs and hand visuals
 			"OculusXRHMD",                // EOculusXRPassthroughLayerOrder, passthrough layer shapes
-			"OculusXRPassthrough"         // UOculusXRPassthroughSubsystem (persistent passthrough)
+			"OculusXRPassthrough",        // UOculusXRPassthroughSubsystem (persistent passthrough)
+
+			// Vision simulator
+			"VisionShaders",              // image processing passes (global shaders)
+			"MRUtilityKit",               // UMRUKPassthroughCameraAccess: passthrough camera frames
+			"AndroidPermission",          // runtime request of horizonos.permission.HEADSET_CAMERA
+			"ProceduralMeshComponent",    // camera feed quad built from the camera intrinsics
+			"RenderCore",
+			"RHI"
 		});
 
 		// Uncomment when you start using these features from C++.

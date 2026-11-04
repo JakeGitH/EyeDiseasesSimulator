@@ -10,6 +10,6 @@ public class EyeDiseasesSimulatorTarget : TargetRules
 		Type = TargetType.Game;
 		DefaultBuildSettings = BuildSettingsVersion.V5;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_6;
-		ExtraModuleNames.Add("EyeDiseasesSimulator");
+		ExtraModuleNames.AddRange(new string[] { "EyeDiseasesSimulator", "VisionShaders" });
 	}
 }
