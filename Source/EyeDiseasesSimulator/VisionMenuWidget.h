@@ -20,7 +20,8 @@ enum class EVisionMenuPage : uint8
 };
 
 /**
- * Base class of the hand menu widget (WBP_HandMenu). All logic lives here; the Blueprint only lays out the UI:
+ * Base class of the hand menu widget. All logic lives here. The default layout is built in C++
+ * (UVisionHandMenuWidget); a Blueprint layout (WBP deriving from this class) would only lay out the UI:
  *
  *   - Widget Switcher with 3 pages in EVisionMenuPage order; in OnMenuRefresh set its active index to (int)Page.
  *   - ConditionList page: one button per GetSelectableConditions() entry -> SelectCondition(Condition).
@@ -90,9 +91,15 @@ protected:
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
 
-	/** Update the switcher page and all texts. */
+	/** Update the switcher page and all texts (Blueprint layouts). */
 	UFUNCTION(BlueprintImplementableEvent, Category = "Vision Menu")
 	void OnMenuRefresh(EVisionMenuPage Page);
+
+	/** Same as OnMenuRefresh, for layouts built in C++ (UVisionHandMenuWidget). Called first. */
+	virtual void NativeOnMenuRefresh(EVisionMenuPage Page) {}
+
+	/** Calls NativeOnMenuRefresh and OnMenuRefresh with the current page. */
+	void RefreshMenu();
 
 	/** Slider ranges. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Vision Menu")

@@ -1,6 +1,5 @@
 #include "VisionSimulatorSubsystem.h"
 
-#include "Blueprint/UserWidget.h"
 #include "Engine/World.h"
 #include "EyeDiseasesSimulator.h"
 #include "HAL/IConsoleManager.h"
@@ -8,6 +7,7 @@
 #include "Misc/PackageName.h"
 #include "TimerManager.h"
 #include "VisionDisplayActor.h"
+#include "VisionHandMenuWidget.h"
 
 namespace
 {
@@ -29,11 +29,9 @@ namespace
 		TEXT("Spawn the hand menu on BeginPlay."),
 		ECVF_Default);
 
-	// Optional Blueprint subclass of AHandMenuActor (to tweak offsets in the editor) and the menu widget.
+	// Optional Blueprint subclass of AHandMenuActor (to tweak offsets or set another menu widget in the editor).
 	const TCHAR* HandMenuActorPackage = TEXT("/Game/VisionSim/UI/BP_HandMenu");
 	const TCHAR* HandMenuActorClassPath = TEXT("/Game/VisionSim/UI/BP_HandMenu.BP_HandMenu_C");
-	const TCHAR* HandMenuWidgetPackage = TEXT("/Game/VisionSim/UI/WBP_HandMenu");
-	const TCHAR* HandMenuWidgetClassPath = TEXT("/Game/VisionSim/UI/WBP_HandMenu.WBP_HandMenu_C");
 
 	template <typename T>
 	TSubclassOf<T> LoadOptionalClass(const TCHAR* PackageName, const TCHAR* ClassPath)
@@ -94,13 +92,10 @@ void UVisionSimulatorSubsystem::SpawnHandMenu(UWorld& InWorld)
 	}
 
 	// The widget must be set before BeginPlay, when the ISDK widget component creates the widget instance.
+	// Default: the menu built in C++.
 	if (!HandMenu->GetMenuWidgetClass())
 	{
-		HandMenu->SetMenuWidgetClass(LoadOptionalClass<UUserWidget>(HandMenuWidgetPackage, HandMenuWidgetClassPath));
-	}
-	if (!HandMenu->GetMenuWidgetClass())
-	{
-		UE_LOG(LogEyeDiseasesSimulator, Warning, TEXT("Hand menu widget %s not found - the hand menu is empty"), HandMenuWidgetClassPath);
+		HandMenu->SetMenuWidgetClass(UVisionHandMenuWidget::StaticClass());
 	}
 
 	HandMenu->FinishSpawning(SpawnTransform);

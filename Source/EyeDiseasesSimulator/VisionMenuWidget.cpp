@@ -19,7 +19,14 @@ void UVisionMenuWidget::NativeConstruct()
 	{
 		Simulator->OnSettingsChanged.AddUniqueDynamic(this, &UVisionMenuWidget::HandleSettingsChanged);
 	}
-	OnMenuRefresh(GetPage());
+	RefreshMenu();
+}
+
+void UVisionMenuWidget::RefreshMenu()
+{
+	const EVisionMenuPage Page = GetPage();
+	NativeOnMenuRefresh(Page);
+	OnMenuRefresh(Page);
 }
 
 void UVisionMenuWidget::NativeDestruct()
@@ -33,7 +40,7 @@ void UVisionMenuWidget::NativeDestruct()
 
 void UVisionMenuWidget::HandleSettingsChanged(const FVisionSettings& Settings)
 {
-	OnMenuRefresh(GetPage());
+	RefreshMenu();
 }
 
 void UVisionMenuWidget::SelectCondition(EVisionCondition Condition)

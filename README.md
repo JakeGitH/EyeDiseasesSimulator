@@ -93,7 +93,7 @@ Przyciski wciska się palcem wskazującym prawej dłoni (poke) albo promieniem (
 - **Prezbiopia**: suwak wieku (40–75 lat).
 - **Porównanie** (opcjonalnie w menu): lewa połowa obrazu bez zmian, prawa przetworzona.
 
-Widget menu: `Content/VisionSim/UI/WBP_HandMenu` (rodzic: `VisionMenuWidget`). Opcjonalnie `BP_HandMenu` (rodzic: `HandMenuActor`) do ustawienia przesunięć w edytorze.
+Menu (układ i styl) jest zbudowane w C++: `UVisionHandMenuWidget`. Opcjonalnie `Content/VisionSim/UI/BP_HandMenu` (rodzic: `HandMenuActor`) do ustawienia przesunięć w edytorze lub podmiany widgetu.
 
 ### Zmienne konsoli
 
@@ -118,7 +118,7 @@ Można je ustawić w `Config/DefaultEngine.ini` w sekcji `[ConsoleVariables]`.
 - [ ] Pomiar wydajności (cel: 72 FPS)
 - [ ] Obraz stereo (osobna kamera dla każdego oka)
 - [x] Logika menu przy dłoni (wykrywanie dłoni, strony menu, suwaki)
-- [ ] Wygląd menu (`WBP_HandMenu`)
+- [x] Wygląd menu (C++, `UVisionHandMenuWidget`)
 - [x] Rozmycie zależne od głębi (krótko-, dalekowzroczność, prezbiopia), do testu na goglach
 - [x] Tryb porównania: obraz zdrowy / chory
 
