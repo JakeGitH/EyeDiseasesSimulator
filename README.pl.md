@@ -7,6 +7,17 @@ Użytkownik widzi swoje prawdziwe otoczenie z kamer gogli, a obraz jest **przetw
 
 Projekt zaliczeniowy z przedmiotu *Przetwarzanie obrazu*.
 
+## Pobieranie
+
+**[Pobierz najnowszy APK](https://github.com/JakeGitH/EyeDiseasesSimulator/releases/latest)** (Meta Quest 3 / 3S, Horizon OS v74+)
+
+1. Włącz [tryb deweloperski](https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/) w goglach.
+2. Zainstaluj APK:
+   - przeciągnij go do [Meta Quest Developer Hub](https://developers.meta.com/horizon/documentation/android-apps/meta-quest-developer-hub/) albo [SideQuest](https://sidequestvr.com/), lub
+   - uruchom `adb install -r EyeDiseasesSimulator-arm64.apk`.
+3. W goglach: *Biblioteka → Nieznane źródła → Eye Diseases Simulator*.
+4. Przy pierwszym uruchomieniu zezwól na dostęp do kamer gogli i do danych przestrzennych.
+
 ## Symulowane schorzenia
 
 | Schorzenie | Co widać | Operacje przetwarzania obrazu |

@@ -7,6 +7,17 @@ You see your real surroundings through the headset cameras, and the image is **p
 
 Course project for *Image Processing*.
 
+## Download
+
+**[Download the latest APK](https://github.com/JakeGitH/EyeDiseasesSimulator/releases/latest)** (Meta Quest 3 / 3S, Horizon OS v74+)
+
+1. Enable [developer mode](https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/) on the headset.
+2. Install the APK:
+   - drag it into [Meta Quest Developer Hub](https://developers.meta.com/horizon/documentation/android-apps/meta-quest-developer-hub/) or [SideQuest](https://sidequestvr.com/), or
+   - run `adb install -r EyeDiseasesSimulator-arm64.apk`.
+3. On the headset: *Library → Unknown Sources → Eye Diseases Simulator*.
+4. On first launch, allow access to the headset cameras and to spatial data.
+
 ## Simulated conditions
 
 | Condition | What you see | Image processing operations |
