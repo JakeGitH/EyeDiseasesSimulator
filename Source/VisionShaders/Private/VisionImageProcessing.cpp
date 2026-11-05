@@ -14,6 +14,12 @@ namespace
 
 	// Largest sigma (in pixels of the texture being blurred) that a 3-sigma kernel of MaxBlurRadius taps covers.
 	constexpr float MaxSigmaPerPass = MaxBlurRadius / 3.0f;
+
+	// Largest sigma the blur chain handles (8x downsample); stronger defocus is clamped to it.
+	constexpr float MaxDefocusSigma = 8.0f * MaxSigmaPerPass;
+
+	// Middle defocus level as a fraction of the strongest one. Pixels between levels are linearly interpolated.
+	constexpr float DefocusMidLevelFraction = 0.35f;
 }
 
 // IMPLEMENT_GLOBAL_SHADER wraps the path in TEXT(), so it must be a plain string literal.
@@ -84,6 +90,10 @@ public:
 		SHADER_PARAMETER_SAMPLER(SamplerState, BlurredSampler)
 		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, GlareTexture)
 		SHADER_PARAMETER_SAMPLER(SamplerState, GlareSampler)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, BlurredMidTexture)
+		SHADER_PARAMETER_SAMPLER(SamplerState, BlurredMidSampler)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, VergenceTexture)
+		SHADER_PARAMETER_SAMPLER(SamplerState, VergenceSampler)
 		SHADER_PARAMETER(FVector2f, CompositeInvSize)
 		SHADER_PARAMETER(float, AspectRatio)
 		SHADER_PARAMETER(uint32, bDecodeInputSRGB)
@@ -97,6 +107,9 @@ public:
 		SHADER_PARAMETER(FVector4f, VignetteParams)
 		SHADER_PARAMETER(FVector4f, ScotomaParams)
 		SHADER_PARAMETER(FVector4f, SpotsParams)
+		SHADER_PARAMETER(FVector4f, DefocusParams)
+		SHADER_PARAMETER(FVector4f, DefocusLevels)
+		SHADER_PARAMETER(FVector4f, OutputParams)
 		RENDER_TARGET_BINDING_SLOTS()
 	END_SHADER_PARAMETER_STRUCT()
 
@@ -256,7 +269,8 @@ void VisionImageProcessing::AddVisionEffectPasses(
 	FRDGBuilder& GraphBuilder,
 	FRDGTextureRef InputTexture,
 	FRDGTextureRef OutputTexture,
-	const FVisionEffectParams& Params)
+	const FVisionEffectParams& Params,
+	FRDGTextureRef VergenceTexture)
 {
 	check(IsInRenderingThread());
 	check(InputTexture && OutputTexture);
@@ -269,10 +283,23 @@ void VisionImageProcessing::AddVisionEffectPasses(
 		&& (Params.UniformBlur > 0.0f || Params.PeripheralBlur > 0.0f || Params.CentralBlur > 0.0f);
 	const bool bNeedsGlare = Params.GlareIntensity > 0.0f && Params.GlareSigma > 0.0f;
 
+	// Depth-dependent defocus replaces the fixed blur: two blur levels (mid, max) for the strongest defocus in the frame.
+	const float DefocusSigmaMax = FMath::Min(Params.MaxDefocusDiopters * Params.BlurSigmaPerDiopter, MaxDefocusSigma);
+	const bool bNeedsDefocus = Params.bDepthDefocus && VergenceTexture && DefocusSigmaMax >= 0.5f;
+	const float DefocusSigmaMid = FMath::Max(DefocusSigmaMax * DefocusMidLevelFraction, 0.5f);
+
 	// Unused inputs are bound to the camera frame itself; their blend weights are zero.
-	FRDGTextureRef Blurred = bNeedsBlur
-		? AddBlurChain(GraphBuilder, ShaderMap, InputTexture, Params.BlurSigma, -1.0f, Params.bDecodeInputSRGB, TEXT("VisionBlur"))
-		: InputTexture;
+	FRDGTextureRef Blurred = InputTexture;
+	FRDGTextureRef BlurredMid = InputTexture;
+	if (bNeedsDefocus)
+	{
+		Blurred = AddBlurChain(GraphBuilder, ShaderMap, InputTexture, DefocusSigmaMax, -1.0f, Params.bDecodeInputSRGB, TEXT("VisionDefocusMax"));
+		BlurredMid = AddBlurChain(GraphBuilder, ShaderMap, InputTexture, DefocusSigmaMid, -1.0f, Params.bDecodeInputSRGB, TEXT("VisionDefocusMid"));
+	}
+	else if (bNeedsBlur)
+	{
+		Blurred = AddBlurChain(GraphBuilder, ShaderMap, InputTexture, Params.BlurSigma, -1.0f, Params.bDecodeInputSRGB, TEXT("VisionBlur"));
+	}
 	FRDGTextureRef Glare = bNeedsGlare
 		? AddBlurChain(GraphBuilder, ShaderMap, InputTexture, Params.GlareSigma, Params.GlareThreshold, Params.bDecodeInputSRGB, TEXT("VisionGlare"))
 		: InputTexture;
@@ -286,13 +313,17 @@ void VisionImageProcessing::AddVisionEffectPasses(
 	Parameters->BlurredSampler = GetBilinearClampSampler();
 	Parameters->GlareTexture = Glare;
 	Parameters->GlareSampler = GetBilinearClampSampler();
+	Parameters->BlurredMidTexture = BlurredMid;
+	Parameters->BlurredMidSampler = GetBilinearClampSampler();
+	Parameters->VergenceTexture = VergenceTexture ? VergenceTexture : InputTexture;
+	Parameters->VergenceSampler = GetBilinearClampSampler();
 	Parameters->CompositeInvSize = FVector2f(1.0f / Extent.X, 1.0f / Extent.Y);
 	Parameters->AspectRatio = static_cast<float>(Extent.X) / Extent.Y;
 	Parameters->bDecodeInputSRGB = Params.bDecodeInputSRGB ? 1u : 0u;
 	Parameters->ColorRow0 = ToVector4(Params.ColorMatrixRows[0]);
 	Parameters->ColorRow1 = ToVector4(Params.ColorMatrixRows[1]);
 	Parameters->ColorRow2 = ToVector4(Params.ColorMatrixRows[2]);
-	Parameters->BlurMix = bNeedsBlur
+	Parameters->BlurMix = (bNeedsBlur && !bNeedsDefocus)
 		? FVector4f(Params.UniformBlur, Params.PeripheralBlur, Params.CentralBlur, 0.0f)
 		: FVector4f::Zero();
 	Parameters->GlareParams = FVector4f(bNeedsGlare ? Params.GlareIntensity : 0.0f, 0.0f, 0.0f, 0.0f);
@@ -301,6 +332,9 @@ void VisionImageProcessing::AddVisionEffectPasses(
 	Parameters->VignetteParams = FVector4f(Params.VignetteInner, Params.VignetteOuter, Params.VignetteDarkness, Params.Brightness);
 	Parameters->ScotomaParams = FVector4f(Params.ScotomaRadius, Params.ScotomaSoftness, Params.ScotomaDarkness, Params.Distortion);
 	Parameters->SpotsParams = FVector4f(Params.SpotsAmount, Params.SpotsDarkness, Params.SpotsScale, Params.SpotsSeed);
+	Parameters->DefocusParams = FVector4f(Params.FocusVergenceMin, Params.FocusVergenceMax, Params.BlurSigmaPerDiopter, bNeedsDefocus ? 1.0f : 0.0f);
+	Parameters->DefocusLevels = FVector4f(DefocusSigmaMid, DefocusSigmaMax, VergenceTexture ? 1.0f : 0.0f, 0.0f);
+	Parameters->OutputParams = FVector4f(Params.CompareSplit, static_cast<float>(Params.DebugView), 0.0f, 0.0f);
 	Parameters->RenderTargets[0] = FRenderTargetBinding(OutputTexture, ERenderTargetLoadAction::ENoAction);
 
 	TShaderMapRef<FVisionCompositePS> PixelShader(ShaderMap);

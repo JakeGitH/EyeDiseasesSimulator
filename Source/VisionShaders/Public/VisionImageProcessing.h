@@ -84,6 +84,28 @@ struct FVisionEffectParams
 	/** Seed that moves the blotch pattern. */
 	float SpotsSeed = 0.0f;
 
+	/**
+	 * Depth-dependent defocus (refractive errors). Needs the vergence map passed to AddVisionEffectPasses:
+	 * a texture with 1 / distance (diopters) for every image position.
+	 * A pixel is blurred with sigma = BlurSigmaPerDiopter * Defocus, where Defocus is how far its vergence lies
+	 * outside [FocusVergenceMin, FocusVergenceMax], the range the simulated eye can focus on.
+	 */
+	bool bDepthDefocus = false;
+	float FocusVergenceMin = 0.0f;
+	float FocusVergenceMax = 0.0f;
+
+	/** Gaussian sigma (full-resolution pixels) caused by one diopter of defocus. Depends on pupil size and camera focal length. */
+	float BlurSigmaPerDiopter = 0.0f;
+
+	/** Largest defocus (diopters) present in the frame. Sets the strongest of the precomputed blur levels. */
+	float MaxDefocusDiopters = 0.0f;
+
+	/** Split view for comparison: pixels left of this horizontal position (0-1) stay unprocessed. Negative disables it. */
+	float CompareSplit = -1.0f;
+
+	/** Debug output: 0 = normal, 1 = vergence map (depth) as grayscale, 2 = per-pixel defocus blur sigma. */
+	int32 DebugView = 0;
+
 	/** Set when the input texture holds sRGB-encoded values but is sampled without hardware sRGB decoding. */
 	bool bDecodeInputSRGB = false;
 };
@@ -93,10 +115,13 @@ namespace VisionImageProcessing
 	/**
 	 * Adds all passes that turn InputTexture (camera frame) into OutputTexture (simulated impaired vision).
 	 * Must be called on the render thread. OutputTexture must be render-targetable.
+	 * VergenceTexture (optional) holds 1 / distance in diopters, in the same UV space as InputTexture;
+	 * it is required for Params.bDepthDefocus.
 	 */
 	VISIONSHADERS_API void AddVisionEffectPasses(
 		FRDGBuilder& GraphBuilder,
 		FRDGTextureRef InputTexture,
 		FRDGTextureRef OutputTexture,
-		const FVisionEffectParams& Params);
+		const FVisionEffectParams& Params,
+		FRDGTextureRef VergenceTexture = nullptr);
 }

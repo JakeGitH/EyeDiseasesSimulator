@@ -52,12 +52,48 @@ namespace
 	}
 }
 
-FVisionEffectParams VisionConditionPresets::MakeEffectParams(EVisionCondition Condition, float Severity)
+float VisionOptics::AccommodationAmplitude(float Age)
 {
-	const float S = FMath::Clamp(Severity, 0.0f, 1.0f);
+	return FMath::Max(18.5f - 0.3f * Age, 0.0f);
+}
+
+float VisionOptics::RefractiveError(const FVisionSettings& Settings)
+{
+	switch (Settings.Condition)
+	{
+	case EVisionCondition::Myopia:
+		return FMath::Min(Settings.MyopiaDiopters, 0.0f);
+	case EVisionCondition::Hyperopia:
+		return FMath::Max(Settings.HyperopiaDiopters, 0.0f);
+	default:
+		return 0.0f;
+	}
+}
+
+void VisionOptics::FocusRange(const FVisionSettings& Settings, float& OutMinVergence, float& OutMaxVergence)
+{
+	OutMinVergence = -RefractiveError(Settings);
+	OutMaxVergence = OutMinVergence + AccommodationAmplitude(Settings.Age);
+}
+
+float VisionOptics::Defocus(float Vergence, float MinVergence, float MaxVergence)
+{
+	return FMath::Max3(MinVergence - Vergence, Vergence - MaxVergence, 0.0f);
+}
+
+bool VisionOptics::UsesDepth(EVisionCondition Condition)
+{
+	return Condition == EVisionCondition::Myopia
+		|| Condition == EVisionCondition::Hyperopia
+		|| Condition == EVisionCondition::Presbyopia;
+}
+
+FVisionEffectParams VisionConditionPresets::MakeEffectParams(const FVisionSettings& Settings)
+{
+	const float S = FMath::Clamp(Settings.Severity, 0.0f, 1.0f);
 	FVisionEffectParams Params;
 
-	switch (Condition)
+	switch (Settings.Condition)
 	{
 	case EVisionCondition::Protanopia:
 		// Missing / anomalous L-cones: red-green confusion, reds look dark.
@@ -118,15 +154,16 @@ FVisionEffectParams VisionConditionPresets::MakeEffectParams(EVisionCondition Co
 		break;
 
 	case EVisionCondition::Myopia:
-		// Nearsightedness: distant objects blurred. Depth is not used yet, so the whole image is blurred.
-		Params.BlurSigma = 1.0f + 14.0f * S;
-		Params.UniformBlur = 1.0f;
-		break;
-
+		// Nearsightedness: the eye focuses in front of the retina. Objects beyond the far point 1 / |D| are blurred,
+		// near objects stay sharp.
 	case EVisionCondition::Hyperopia:
-		// Farsightedness: near objects blurred. Without depth, a milder uniform blur is applied.
-		Params.BlurSigma = 1.0f + 8.0f * S;
-		Params.UniformBlur = 1.0f;
+		// Farsightedness: the relaxed eye focuses behind the retina; accommodation compensates as long as it can,
+		// so near objects (closer than the near point) are blurred first.
+	case EVisionCondition::Presbyopia:
+		// Age-related loss of accommodation: the near point moves away, near objects are blurred.
+		// All three use the same thin-lens model (VisionOptics::FocusRange) and the per-pixel depth (vergence) map.
+		Params.bDepthDefocus = true;
+		VisionOptics::FocusRange(Settings, Params.FocusVergenceMin, Params.FocusVergenceMax);
 		break;
 
 	case EVisionCondition::DiabeticRetinopathy:

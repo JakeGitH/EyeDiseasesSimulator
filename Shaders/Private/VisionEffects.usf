@@ -4,8 +4,8 @@
 // Pipeline for one camera frame:
 //   DownsamplePS   - box filter to 1/2^n resolution (+ optional bright-pass for glare)
 //   GaussianBlurPS - separable Gaussian convolution, run once horizontally and once vertically
-//   CompositePS    - per-pixel operations: blur mixing masks, glare, 3x3 color matrix, haze, contrast,
-//                    peripheral vignette, central scotoma, metamorphopsia distortion, noise blotches
+//   CompositePS    - per-pixel operations: blur mixing masks, depth-dependent defocus, glare, 3x3 color matrix,
+//                    haze, contrast, peripheral vignette, central scotoma, metamorphopsia distortion, noise blotches
 //
 // All color math is done in linear RGB.
 
@@ -147,6 +147,10 @@ Texture2D BlurredTexture;
 SamplerState BlurredSampler;
 Texture2D GlareTexture;
 SamplerState GlareSampler;
+Texture2D BlurredMidTexture;
+SamplerState BlurredMidSampler;
+Texture2D VergenceTexture;
+SamplerState VergenceSampler;
 
 float2 CompositeInvSize;
 float AspectRatio;          // width / height
@@ -161,6 +165,9 @@ float4 TintAndContrast;     // rgb: tint, a: contrast
 float4 VignetteParams;      // x: inner radius, y: outer radius, z: darkness, w: brightness
 float4 ScotomaParams;       // x: radius, y: softness, z: darkness, w: distortion
 float4 SpotsParams;         // x: amount, y: darkness, z: scale, w: seed
+float4 DefocusParams;       // x: min focus vergence (D), y: max focus vergence (D), z: sigma per diopter (px), w: enabled
+float4 DefocusLevels;       // x: sigma of BlurredMidTexture, y: sigma of BlurredTexture (px), z: vergence map bound
+float4 OutputParams;        // x: compare split position (< 0 = off), y: debug view
 
 float3 SampleInput(float2 UV)
 {
@@ -197,6 +204,27 @@ void CompositePS(float4 SvPosition : SV_POSITION, out float4 OutColor : SV_Targe
 	float BlurAmount = saturate(BlurMix.x + BlurMix.y * Peripheral + BlurMix.z * Central);
 	float3 Color = lerp(Sharp, Blurred, BlurAmount);
 
+	// Depth-dependent defocus (refractive errors), thin-lens model:
+	//   V       = 1 / distance [diopters], read from the low-resolution vergence map (bilinear upsampling)
+	//   Defocus = distance of V from the focus range [Vmin, Vmax] of the simulated eye
+	//   Sigma   = Defocus * SigmaPerDiopter   (blur circle diameter = pupil * defocus [rad], sigma ~ diameter / 4)
+	// A Gaussian of arbitrary sigma is approximated by interpolating three precomputed levels: 0, SigmaMid, SigmaMax.
+	float Sigma = 0.0;
+	float Vergence = 0.0;
+	if (DefocusParams.w > 0.0)
+	{
+		Vergence = VergenceTexture.SampleLevel(VergenceSampler, UV, 0).r;
+		float Defocus = max(max(DefocusParams.x - Vergence, Vergence - DefocusParams.y), 0.0);
+		Sigma = Defocus * DefocusParams.z;
+
+		float3 Mid = BlurredMidTexture.SampleLevel(BlurredMidSampler, UV, 0).rgb;
+		float SigmaMid = DefocusLevels.x;
+		float SigmaMax = DefocusLevels.y;
+		Color = Sigma < SigmaMid
+			? lerp(Sharp, Mid, Sigma / max(SigmaMid, 1e-3))
+			: lerp(Mid, Blurred, saturate((Sigma - SigmaMid) / max(SigmaMax - SigmaMid, 1e-3)));
+	}
+
 	// Glare: blurred bright-pass added on top (light scattered by a cloudy lens).
 	Color += GlareTexture.SampleLevel(GlareSampler, UV, 0).rgb * GlareParams.x;
 
@@ -227,6 +255,33 @@ void CompositePS(float4 SvPosition : SV_POSITION, out float4 OutColor : SV_Targe
 		float Threshold = lerp(0.80, 0.50, SpotsParams.x);
 		float Spot = smoothstep(Threshold, Threshold + 0.06, Noise);
 		Color *= 1.0 - SpotsParams.y * Spot;
+	}
+
+	// Debug views for the documentation: the depth data behind the defocus blur.
+	if (OutputParams.y > 0.5)
+	{
+		if (DefocusParams.w <= 0.0 && DefocusLevels.z > 0.0)
+		{
+			Vergence = VergenceTexture.SampleLevel(VergenceSampler, UV, 0).r;
+		}
+		// 1: vergence map, white = near (>= 4 D, 25 cm), black = far. 2: blur sigma, white = 16 px.
+		float Value = OutputParams.y < 1.5 ? saturate(Vergence / 4.0) : saturate(Sigma / 16.0);
+		Color = Value * Value; // display roughly perceptually linear (output is sRGB-encoded)
+	}
+
+	// Comparison mode: unprocessed image left of the split line, thin separator line.
+	if (OutputParams.x >= 0.0)
+	{
+		float2 OriginalUV = SvPosition.xy * CompositeInvSize;
+		if (OriginalUV.x < OutputParams.x)
+		{
+			Color = SampleInput(OriginalUV);
+		}
+		float LineHalfWidth = 1.5 * CompositeInvSize.x;
+		if (abs(OriginalUV.x - OutputParams.x) < LineHalfWidth)
+		{
+			Color = float3(1.0, 1.0, 1.0);
+		}
 	}
 
 	OutColor = float4(saturate(Color), 1.0);

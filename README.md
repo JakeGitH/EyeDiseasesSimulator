@@ -14,10 +14,22 @@ Projekt zaliczeniowy z przedmiotu *Przetwarzanie obrazu*.
 | Zaćma | rozmycie, zamglenie, żółknięcie, olśnienie przy światłach | rozmycie Gaussa, mieszanie z kolorem mgły, spadek kontrastu, filtr bright-pass + rozmycie (glare) |
 | Jaskra | zawężenie pola widzenia (widzenie tunelowe) | radialna maska z łagodnym przejściem, rozmycie peryferii |
 | Zwyrodnienie plamki (AMD) | ciemna, rozmyta plama w centrum, falujące linie | maska centralna z zaszumioną krawędzią, przemieszczenie UV (metamorfopsja) |
-| Krótkowzroczność / Dalekowzroczność | nieostry obraz | rozmycie Gaussa (na razie jednolite, bez głębi) |
+| Krótkowzroczność / Dalekowzroczność / Prezbiopia | nieostre obiekty dalekie (krótkowzroczność) albo bliskie (dalekowzroczność, prezbiopia) | **rozmycie zależne od głębi**: mapa wergencji (1/odległość) z Depth API, model soczewki cienkiej, rozmycie Gaussa o zmiennej sigmie (interpolacja 3 poziomów) |
 | Retinopatia cukrzycowa | ciemne plamy, rozmycie | progowany szum fraktalny (fBm), rozmycie, spadek kontrastu |
 
-Każde schorzenie ma parametr **nasilenia** (0–1).
+Większość schorzeń ma parametr **nasilenia** (0–1). Wady refrakcji ustawia się fizycznie: w **dioptriach** (np. −7 D, +4 D) i wiekiem (amplituda akomodacji).
+
+### Rozmycie zależne od głębi (wady refrakcji)
+
+1. **Mapa głębi**: siatka 40×30 promieni z kamery przez środki komórek obrazu, raycast po danych Depth API (MRUK `RaycastEnvironment`), 300 promieni na klatkę (round robin). Wynik zapisywany jako **wergencja** V = 1/d [D] w teksturze R16F, upsampling dwuliniowy w shaderze.
+2. **Zakres ostrości oka**: oko z wadą R [D] bez akomodacji ogniskuje wergencję −R, akomodacja A dodaje do A dioptrii:
+   `Vmin = −R`, `Vmax = −R + A`, gdzie `A = max(0, 18.5 − 0.3·wiek)` (wzór Hofstettera).
+   Punkt daleki = 1/Vmin, punkt bliski = 1/Vmax.
+3. **Rozogniskowanie** piksela: `ΔD = max(Vmin − V, V − Vmax, 0)`.
+4. **Wielkość rozmycia**: krążek rozproszenia ma średnicę kątową `β = p·ΔD` (p = średnica źrenicy w m). Gaussian o tym samym momencie drugim co dysk o promieniu r ma `σ = r/2`, więc `σ_px = f_px · p · ΔD / 4` (f_px = ogniskowa kamery w pikselach).
+5. **Rozmycie o zmiennej sigmie**: na GPU liczone są dwa poziomy (σ_max dla największego ΔD w kadrze i 0.35·σ_max), a każdy piksel interpoluje liniowo między obrazem ostrym, poziomem środkowym i maksymalnym.
+
+Przykład (wiek 45 → A = 5 D): −3 D: ostro od 13 cm do 33 cm. +3 D: ostro od 50 cm do nieskończoności. +6 D: nic nie jest ostre.
 
 ## Jak to działa
 
@@ -28,8 +40,12 @@ Kamera passthrough Questa (Meta XR: Passthrough Camera Access)
 VisionShaders (HLSL, Render Dependency Graph)
    DownsamplePS   → zmniejszenie 2^n×  (+ bright-pass dla poświaty)
    GaussianBlurPS → separowalny splot Gaussa (poziomo, potem pionowo)
-   CompositePS    → maski rozmycia, poświata, macierz kolorów, mgła,
-                    kontrast, winieta, skotoma, zniekształcenie, plamy
+   CompositePS    → maski rozmycia, rozmycie wg głębi, poświata, macierz
+                    kolorów, mgła, kontrast, winieta, skotoma, zniekształcenie,
+                    plamy, tryb porównania
+        ▲
+        │ mapa wergencji 40×30 (R16F)
+UVisionDepthMap ← raycasty po Depth API (MRUK)
         │
         ▼
 Render target → quad przed oczami, ustawiony wg parametrów kamery
@@ -42,9 +58,13 @@ Najważniejsze pliki:
 |---|---|
 | `Shaders/Private/VisionEffects.usf` | wszystkie algorytmy przetwarzania obrazu (HLSL) |
 | `Source/VisionShaders/` | moduł shaderów: klasy shaderów i kolejność przebiegów (RDG) |
-| `Source/EyeDiseasesSimulator/VisionConditionPresets.cpp` | parametry każdego schorzenia w zależności od nasilenia |
-| `Source/EyeDiseasesSimulator/VisionDisplayActor.*` | kamera, uprawnienia, przetwarzanie co klatkę, wyświetlanie |
-| `Source/EyeDiseasesSimulator/VisionSimulatorSubsystem.*` | aktualne schorzenie i nasilenie (API dla menu/UI) |
+| `Source/EyeDiseasesSimulator/VisionConditionPresets.cpp` | parametry każdego schorzenia, model optyczny wad refrakcji (`VisionOptics`) |
+| `Source/EyeDiseasesSimulator/VisionDisplayActor.*` | kamera, uprawnienia, przetwarzanie co klatkę, wyświetlanie, rozmycie na dioptrię |
+| `Source/EyeDiseasesSimulator/VisionDepthMap.*` | mapa głębi (wergencji) z raycastów Depth API |
+| `Source/EyeDiseasesSimulator/VisionSimulatorSubsystem.*` | stan symulatora (`FVisionSettings`), API dla menu |
+| `Source/EyeDiseasesSimulator/HandMenuActor.*` | menu przy dłoni (ogólne, do przeniesienia do szablonu) |
+| `Source/EyeDiseasesSimulator/VisionMenuWidget.*` | logika menu (klasa bazowa `WBP_HandMenu`) |
+| `Source/EyeDiseasesSimulator/VisionConditionLibrary.*` | nazwy i opisy schorzeń dla UI |
 | `Tools/CreateVisionAssets.py` | tworzy materiał `M_VisionFeed` w edytorze |
 
 ## Wymagania
@@ -60,30 +80,51 @@ Najważniejsze pliki:
 2. Kliknij prawym na `EyeDiseasesSimulator.uproject` → *Generate Visual Studio project files*, potem otwórz projekt (skompiluje moduły C++).
 3. Utwórz materiał wyświetlający obraz: w edytorze *Tools → Execute Python Script* → `Tools/CreateVisionAssets.py`.
 4. Spakuj projekt na Androida (*Platforms → Android → Package Project*) i zainstaluj APK na goglach.
-5. Przy pierwszym uruchomieniu zezwól aplikacji na dostęp do kamery gogli.
+5. Przy pierwszym uruchomieniu zezwól aplikacji na dostęp do kamery gogli i do danych przestrzennych (potrzebne do głębi).
 
-## Sterowanie (wersja tymczasowa)
+## Sterowanie
 
-Dopóki nie ma menu przy dłoni, schorzenia przełączają się automatycznie co 6 sekund.
-Steruje tym zmienna konsoli `vision.AutoCycleSeconds` (0 = wyłączone). Można ją ustawić w `Config/DefaultEngine.ini`:
+Aplikacja startuje z normalnym obrazem. **Menu przy lewej dłoni** pojawia się, gdy obrócisz wnętrze dłoni do twarzy i na nią spojrzysz.
+Przyciski wciska się palcem wskazującym prawej dłoni (poke) albo promieniem (ray).
 
-```ini
-[ConsoleVariables]
-vision.AutoCycleSeconds=10
-```
+- **Lista schorzeń**: wybranie schorzenia włącza je i zmienia stronę menu, więc przypadkowe dotknięcie nie przełączy na inne.
+- **Back**: wyłącza schorzenie i wraca do listy.
+- **Krótkowzroczność / dalekowzroczność**: suwak w dioptriach (−10…−0.25 D / +0.25…+6 D) oraz informacja, w jakim zakresie odległości obraz jest ostry.
+- **Prezbiopia**: suwak wieku (40–75 lat).
+- **Porównanie** (opcjonalnie w menu): lewa połowa obrazu bez zmian, prawa przetworzona.
+
+Widget menu: `Content/VisionSim/UI/WBP_HandMenu` (rodzic: `VisionMenuWidget`). Opcjonalnie `BP_HandMenu` (rodzic: `HandMenuActor`) do ustawienia przesunięć w edytorze.
+
+### Zmienne konsoli
+
+| Zmienna | Domyślnie | Opis |
+|---|---|---|
+| `vision.AutoCycleSeconds` | 0 | automatyczne przełączanie schorzeń co N s (demo bez menu) |
+| `vision.PupilDiameterMm` | 5 | średnica źrenicy, skaluje rozmycie wad refrakcji |
+| `vision.DefocusScale` | 1 | dodatkowy mnożnik rozmycia (1 = fizycznie) |
+| `vision.DebugView` | 0 | 1 = mapa głębi, 2 = sigma rozmycia (do dokumentacji) |
+| `vision.Depth.RaysPerFrame` | 300 | liczba raycastów głębi na klatkę |
+| `vision.Depth.FallbackDistance` | 2 | odległość [m] przyjmowana bez danych o głębi |
+| `handmenu.Debug` | 0 | rysuje normalną dłoni i stan wykrywania |
+
+Można je ustawić w `Config/DefaultEngine.ini` w sekcji `[ConsoleVariables]`.
 
 ## Status
 
 - [x] Dostęp do klatek z kamer (Passthrough Camera Access)
 - [x] Potok przetwarzania obrazu w shaderach (rozmycie, poświata, macierze kolorów, maski, szum)
 - [x] Parametry wszystkich schorzeń
-- [ ] Test na goglach: wyrównanie obrazu z rzeczywistym widokiem, wydajność (cel: 72 FPS)
+- [x] Test na goglach: obraz z kamer i efekty działają
+- [ ] Pomiar wydajności (cel: 72 FPS)
 - [ ] Obraz stereo (osobna kamera dla każdego oka)
-- [ ] Menu przy dłoni: wybór schorzenia, suwak nasilenia
-- [ ] Rozmycie zależne od głębi (krótko- i dalekowzroczność)
-- [ ] Tryb porównania: obraz zdrowy / chory
+- [x] Logika menu przy dłoni (wykrywanie dłoni, strony menu, suwaki)
+- [ ] Wygląd menu (`WBP_HandMenu`)
+- [x] Rozmycie zależne od głębi (krótko-, dalekowzroczność, prezbiopia), do testu na goglach
+- [x] Tryb porównania: obraz zdrowy / chory
 
 ## Źródła
 
 - G. M. Machado, M. M. Oliveira, L. A. F. Fernandes, *A Physiologically-based Model for Simulation of Color Vision Deficiency*, IEEE TVCG 15(6), 2009.
+- H. W. Hofstetter, *Useful age-amplitude formula*, Optometry World 38, 1950 (amplituda akomodacji w funkcji wieku).
+- Meta, *Depth API* / MR Utility Kit *Environment Raycasting*: dokumentacja Meta Horizon OS dla deweloperów.
 - Meta, *Passthrough Camera API* — dokumentacja Meta Horizon OS dla deweloperów.

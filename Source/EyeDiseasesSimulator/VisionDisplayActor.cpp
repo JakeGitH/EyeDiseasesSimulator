@@ -6,6 +6,7 @@
 #include "Engine/Engine.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
+#include "HAL/IConsoleManager.h"
 #include "EyeDiseasesSimulator.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
@@ -18,15 +19,35 @@
 #include "RenderingThread.h"
 #include "TextureResource.h"
 #include "VisionCondition.h"
+#include "VisionDepthMap.h"
 #include "VisionImageProcessing.h"
 #include "VisionSimulatorSubsystem.h"
 
 namespace
 {
 	const TCHAR* HeadsetCameraPermission = TEXT("horizonos.permission.HEADSET_CAMERA");
+	const TCHAR* ScenePermission = TEXT("com.oculus.permission.USE_SCENE");
 
 	// Used only when the runtime reports no intrinsics (e.g. no headset). Roughly the Quest 3 camera FOV.
 	constexpr double FallbackHorizontalFovDegrees = 80.0;
+
+	TAutoConsoleVariable<float> CVarPupilDiameterMm(
+		TEXT("vision.PupilDiameterMm"),
+		5.0f,
+		TEXT("Pupil diameter (mm) of the simulated eye. Blur circle = pupil * defocus; typical indoor value 4-6 mm."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<float> CVarDefocusScale(
+		TEXT("vision.DefocusScale"),
+		1.0f,
+		TEXT("Multiplier of the physically based defocus blur (1 = no exaggeration)."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarDebugView(
+		TEXT("vision.DebugView"),
+		0,
+		TEXT("0 = normal, 1 = vergence (depth) map, 2 = defocus blur sigma."),
+		ECVF_Default);
 }
 
 AVisionDisplayActor::AVisionDisplayActor()
@@ -49,6 +70,11 @@ UTexture* AVisionDisplayActor::GetCameraTexture() const
 	return CameraTexture;
 }
 
+bool AVisionDisplayActor::HasDepth() const
+{
+	return DepthMap && DepthMap->HasRealDepth();
+}
+
 void AVisionDisplayActor::BeginPlay()
 {
 	Super::BeginPlay();
@@ -63,23 +89,44 @@ void AVisionDisplayActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		PermissionDelegateHandle.Reset();
 	}
 	StopCamera();
+	if (DepthMap)
+	{
+		DepthMap->SetActive(false);
+	}
 	Super::EndPlay(EndPlayReason);
 }
 
 void AVisionDisplayActor::RequestPermissionAndStart()
 {
 #if PLATFORM_ANDROID
-	if (!UAndroidPermissionFunctionLibrary::CheckPermission(HeadsetCameraPermission))
+	const bool bCameraGranted = UAndroidPermissionFunctionLibrary::CheckPermission(HeadsetCameraPermission);
+	bScenePermissionGranted = UAndroidPermissionFunctionLibrary::CheckPermission(ScenePermission);
+
+	TArray<FString> Missing;
+	if (!bCameraGranted)
 	{
-		UE_LOG(LogEyeDiseasesSimulator, Log, TEXT("Requesting permission %s"), HeadsetCameraPermission);
-		TArray<FString> Permissions;
-		Permissions.Add(HeadsetCameraPermission);
-		if (UAndroidPermissionCallbackProxy* Proxy = UAndroidPermissionFunctionLibrary::AcquirePermissions(Permissions))
+		Missing.Add(HeadsetCameraPermission);
+	}
+	if (!bScenePermissionGranted)
+	{
+		Missing.Add(ScenePermission);
+	}
+
+	if (Missing.Num() > 0)
+	{
+		UE_LOG(LogEyeDiseasesSimulator, Log, TEXT("Requesting permissions: %s"), *FString::Join(Missing, TEXT(", ")));
+		if (UAndroidPermissionCallbackProxy* Proxy = UAndroidPermissionFunctionLibrary::AcquirePermissions(Missing))
 		{
 			PermissionDelegateHandle = Proxy->OnPermissionsGrantedDelegate.AddUObject(this, &AVisionDisplayActor::HandlePermissionsGranted);
 		}
+	}
+
+	if (!bCameraGranted)
+	{
 		return;
 	}
+#else
+	bScenePermissionGranted = true;
 #endif
 	StartCamera();
 }
@@ -87,8 +134,9 @@ void AVisionDisplayActor::RequestPermissionAndStart()
 void AVisionDisplayActor::HandlePermissionsGranted(const TArray<FString>& Permissions, const TArray<bool>& GrantResults)
 {
 	// The proxy is a shared singleton and also reports permissions requested by other code.
-	const int32 Index = Permissions.IndexOfByKey(FString(HeadsetCameraPermission));
-	if (Index == INDEX_NONE)
+	const int32 CameraIndex = Permissions.IndexOfByKey(FString(HeadsetCameraPermission));
+	const int32 SceneIndex = Permissions.IndexOfByKey(FString(ScenePermission));
+	if (CameraIndex == INDEX_NONE && SceneIndex == INDEX_NONE)
 	{
 		return;
 	}
@@ -96,14 +144,24 @@ void AVisionDisplayActor::HandlePermissionsGranted(const TArray<FString>& Permis
 	UAndroidPermissionCallbackProxy::GetInstance()->OnPermissionsGrantedDelegate.Remove(PermissionDelegateHandle);
 	PermissionDelegateHandle.Reset();
 
-	if (GrantResults.IsValidIndex(Index) && GrantResults[Index])
+	if (SceneIndex != INDEX_NONE)
 	{
-		UE_LOG(LogEyeDiseasesSimulator, Log, TEXT("Permission %s granted"), HeadsetCameraPermission);
-		StartCamera();
+		bScenePermissionGranted = GrantResults.IsValidIndex(SceneIndex) && GrantResults[SceneIndex];
+		UE_LOG(LogEyeDiseasesSimulator, Log, TEXT("Permission %s %s"), ScenePermission,
+			bScenePermissionGranted ? TEXT("granted") : TEXT("denied - depth-dependent blur uses a fixed distance"));
 	}
-	else
+
+	if (CameraIndex != INDEX_NONE)
 	{
-		UE_LOG(LogEyeDiseasesSimulator, Error, TEXT("Permission %s denied - camera image unavailable"), HeadsetCameraPermission);
+		if (GrantResults.IsValidIndex(CameraIndex) && GrantResults[CameraIndex])
+		{
+			UE_LOG(LogEyeDiseasesSimulator, Log, TEXT("Permission %s granted"), HeadsetCameraPermission);
+			StartCamera();
+		}
+		else
+		{
+			UE_LOG(LogEyeDiseasesSimulator, Error, TEXT("Permission %s denied - camera image unavailable"), HeadsetCameraPermission);
+		}
 	}
 }
 
@@ -135,6 +193,9 @@ void AVisionDisplayActor::StartCamera()
 
 	CreateOutputTarget(CameraAccess->ResolutionWidth, CameraAccess->ResolutionHeight);
 	BuildFeedMesh();
+
+	DepthMap = NewObject<UVisionDepthMap>(this);
+	DepthMap->Initialize(DepthGridSize);
 
 	if (UMaterialInterface* Material = FeedMaterial.LoadSynchronous())
 	{
@@ -187,8 +248,8 @@ void AVisionDisplayActor::BuildFeedMesh()
 		UE_LOG(LogEyeDiseasesSimulator, Warning, TEXT("No camera intrinsics - using a %.0f deg fallback FOV"), FallbackHorizontalFovDegrees);
 		Sensor = Current;
 		Principal = Current * 0.5;
-		const double FocalLength = (Current.X * 0.5) / FMath::Tan(FMath::DegreesToRadians(FallbackHorizontalFovDegrees * 0.5));
-		Focal = FVector2D(FocalLength, FocalLength);
+		const double FallbackFocal = (Current.X * 0.5) / FMath::Tan(FMath::DegreesToRadians(FallbackHorizontalFovDegrees * 0.5));
+		Focal = FVector2D(FallbackFocal, FallbackFocal);
 	}
 	else
 	{
@@ -201,8 +262,11 @@ void AVisionDisplayActor::BuildFeedMesh()
 	// (same as UMRUKPassthroughCameraAccessSubsystem::CalcSensorCropRegion).
 	FVector2D Scale = Current / Sensor;
 	Scale /= Scale.GetMax();
-	const FVector2D CropOrigin = Sensor * (FVector2D(1.0, 1.0) - Scale) * 0.5;
-	const FVector2D CropSize = Sensor * Scale;
+	CropOrigin = Sensor * (FVector2D(1.0, 1.0) - Scale) * 0.5;
+	CropSize = Sensor * Scale;
+	FocalLength = Focal;
+	PrincipalPoint = Principal;
+	StreamFocalPixels = Focal.X * Current.X / CropSize.X;
 
 	// Pinhole model: viewport point (U, V) -> ray (1, (x - cx) / fx, (y - cy) / fy) in camera space (X forward, Y right, Z up),
 	// matching UMRUKPassthroughCameraAccessSubsystem::ViewportPointToWorldSpaceRay. The quad lies on the plane X = DisplayDistance.
@@ -226,6 +290,17 @@ void AVisionDisplayActor::BuildFeedMesh()
 	const TArray<FProcMeshTangent> Tangents = { FProcMeshTangent(0, 1, 0), FProcMeshTangent(0, 1, 0), FProcMeshTangent(0, 1, 0), FProcMeshTangent(0, 1, 0) };
 
 	FeedMesh->CreateMeshSection_LinearColor(0, Vertices, Triangles, Normals, UVs, Colors, Tangents, /*bCreateCollision*/ false);
+}
+
+FVector AVisionDisplayActor::TextureUVToCameraRay(const FVector2D& UV) const
+{
+	// Inverse of the UV flip applied to the quad in BuildFeedMesh (the flip is its own inverse).
+	const double U = bFlipHorizontal ? 1.0 - UV.X : UV.X;
+	const double V = bFlipVertical ? 1.0 - UV.Y : UV.Y;
+	return FVector(
+		1.0,
+		(CropOrigin.X + CropSize.X * U - PrincipalPoint.X) / FocalLength.X,
+		(CropOrigin.Y + CropSize.Y * V - PrincipalPoint.Y) / FocalLength.Y);
 }
 
 void AVisionDisplayActor::UpdateFeedTransform()
@@ -276,15 +351,59 @@ void AVisionDisplayActor::Tick(float DeltaSeconds)
 	UpdateFeedTransform();
 
 	const UVisionSimulatorSubsystem* Simulator = GetWorld()->GetSubsystem<UVisionSimulatorSubsystem>();
-	FVisionEffectParams Params = Simulator
-		? VisionConditionPresets::MakeEffectParams(Simulator->GetCondition(), Simulator->GetSeverity())
-		: FVisionEffectParams();
+	const FVisionSettings Settings = Simulator ? Simulator->GetSettings() : FVisionSettings();
+	FVisionEffectParams Params = VisionConditionPresets::MakeEffectParams(Settings);
+	Params.CompareSplit = Settings.bCompareMode ? 0.5f : -1.0f;
+	Params.DebugView = CVarDebugView.GetValueOnGameThread();
+
+	UpdateDepth(Params);
+	ApplyDefocusParams(Params);
 
 	// On Android the camera texture is created with an sRGB format, so the GPU decodes it when sampling.
 	// On PC (Link) the same bytes arrive in a linear texture and must be decoded in the shader.
 	Params.bDecodeInputSRGB = !PLATFORM_ANDROID;
 
 	EnqueueImageProcessing(Params);
+}
+
+void AVisionDisplayActor::UpdateDepth(const FVisionEffectParams& Params)
+{
+	if (!DepthMap)
+	{
+		return;
+	}
+
+	// The Depth API costs GPU time and power: run it only while a depth-based condition (or a debug view) is shown.
+	const bool bNeedsDepth = bScenePermissionGranted && (Params.bDepthDefocus || Params.DebugView != 0);
+	DepthMap->SetActive(bNeedsDepth);
+	if (bNeedsDepth)
+	{
+		// The quad sits at the camera pose (head-locked: head + lens offset, world-locked: frame pose).
+		const FTransform CameraToWorld(FeedMesh->GetComponentQuat(), FeedMesh->GetComponentLocation());
+		DepthMap->Update(CameraToWorld, [this](const FVector2D& UV) { return TextureUVToCameraRay(UV); });
+	}
+}
+
+void AVisionDisplayActor::ApplyDefocusParams(FVisionEffectParams& Params) const
+{
+	if (!Params.bDepthDefocus || !DepthMap)
+	{
+		return;
+	}
+
+	// Geometric optics: an object with defocus D (diopters) forms a blur circle of angular diameter pupil[m] * D [rad].
+	// A uniform disk of radius r has a per-axis standard deviation of r / 2, so the matching Gaussian has
+	// sigma = pupil * D / 4 [rad]; times the focal length in pixels gives sigma in image pixels.
+	const double PupilMeters = FMath::Max(CVarPupilDiameterMm.GetValueOnGameThread(), 0.5f) * 1.0e-3;
+	Params.BlurSigmaPerDiopter = static_cast<float>(StreamFocalPixels * PupilMeters / 4.0 * CVarDefocusScale.GetValueOnGameThread());
+
+	// Strongest defocus in the current depth map sets the blur levels computed on the GPU.
+	float MaxDefocus = 0.0f;
+	for (const float Vergence : DepthMap->GetVergences())
+	{
+		MaxDefocus = FMath::Max(MaxDefocus, VisionOptics::Defocus(Vergence, Params.FocusVergenceMin, Params.FocusVergenceMax));
+	}
+	Params.MaxDefocusDiopters = MaxDefocus;
 }
 
 void AVisionDisplayActor::EnqueueImageProcessing(const FVisionEffectParams& Params)
@@ -296,8 +415,13 @@ void AVisionDisplayActor::EnqueueImageProcessing(const FVisionEffectParams& Para
 		return;
 	}
 
+	const bool bUseVergence = Params.bDepthDefocus || Params.DebugView != 0;
+	FTextureResource* VergenceResource = (bUseVergence && DepthMap && DepthMap->GetTexture())
+		? DepthMap->GetTexture()->GetResource()
+		: nullptr;
+
 	ENQUEUE_RENDER_COMMAND(VisionImageProcessing)(
-		[InputResource, OutputResource, Params](FRHICommandListImmediate& RHICmdList)
+		[InputResource, OutputResource, VergenceResource, Params](FRHICommandListImmediate& RHICmdList)
 		{
 			// Read on the render thread: the PCA texture recreates its RHI texture when the resolution changes.
 			FRHITexture* InputRHI = InputResource->TextureRHI;
@@ -311,7 +435,13 @@ void AVisionDisplayActor::EnqueueImageProcessing(const FVisionEffectParams& Para
 			FRDGTextureRef Input = GraphBuilder.RegisterExternalTexture(CreateRenderTarget(InputRHI, TEXT("VisionCameraFrame")));
 			FRDGTextureRef Output = GraphBuilder.RegisterExternalTexture(CreateRenderTarget(OutputRHI, TEXT("VisionOutput")));
 
-			VisionImageProcessing::AddVisionEffectPasses(GraphBuilder, Input, Output, Params);
+			FRDGTextureRef Vergence = nullptr;
+			if (VergenceResource && VergenceResource->TextureRHI)
+			{
+				Vergence = GraphBuilder.RegisterExternalTexture(CreateRenderTarget(VergenceResource->TextureRHI, TEXT("VisionVergenceMap")));
+			}
+
+			VisionImageProcessing::AddVisionEffectPasses(GraphBuilder, Input, Output, Params, Vergence);
 
 			// The feed material samples the result later in the frame.
 			GraphBuilder.SetTextureAccessFinal(Output, ERHIAccess::SRVMask);

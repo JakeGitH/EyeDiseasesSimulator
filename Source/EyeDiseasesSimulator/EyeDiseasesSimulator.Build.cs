@@ -34,9 +34,13 @@ public class EyeDiseasesSimulator : ModuleRules
 
 			// Vision simulator
 			"VisionShaders",              // image processing passes (global shaders)
-			"MRUtilityKit",               // UMRUKPassthroughCameraAccess: passthrough camera frames
+			"MRUtilityKit",               // UMRUKPassthroughCameraAccess: passthrough camera frames; environment raycasts (depth)
+			"OculusXRAnchors",            // included by the MRUK subsystem headers
 			"AndroidPermission",          // runtime request of horizonos.permission.HEADSET_CAMERA
 			"ProceduralMeshComponent",    // camera feed quad built from the camera intrinsics
+			"UMG",                        // hand menu widget
+			"Slate",
+			"SlateCore",
 			"RenderCore",
 			"RHI"
 		});
