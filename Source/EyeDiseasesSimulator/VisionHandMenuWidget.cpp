@@ -196,14 +196,28 @@ void UVisionHandMenuWidget::BuildLayout()
 	PageSwitcher->AddChild(BuildConditionListPage());
 	PageSwitcher->AddChild(BuildActiveConditionPage());
 	PageSwitcher->AddChild(BuildAdjustConditionPage());
+	PageSwitcher->AddChild(BuildConfirmExitPage());
 	Main->AddChildToVerticalBox(PageSwitcher)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 
-	// Footer: comparison mode (normal | impaired split screen)
+	// Footer: comparison mode (normal | impaired split screen) and exit
+	UHorizontalBox* FooterRow = WidgetTree->ConstructWidget<UHorizontalBox>();
+	Footer = FooterRow;
+
 	UTextBlock* CompareLabel = nullptr;
 	UButton* CompareButton = MakeButton(FText::GetEmpty(), 56.0f, false, &CompareLabel);
 	CompareText = CompareLabel;
 	CompareButton->OnClicked.AddUniqueDynamic(this, &UVisionHandMenuWidget::HandleCompareClicked);
-	Main->AddChildToVerticalBox(CompareButton->GetParent())->SetPadding(FMargin(0.0f, 12.0f, 0.0f, 0.0f));
+	UHorizontalBoxSlot* CompareSlot = FooterRow->AddChildToHorizontalBox(CompareButton->GetParent());
+	CompareSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+	CompareSlot->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
+
+	UButton* ExitButton = MakeButton(LOCTEXT("Exit", "Exit"), 56.0f, true);
+	ExitButton->OnClicked.AddUniqueDynamic(this, &UVisionHandMenuWidget::HandleExitClicked);
+	USizeBox* ExitBox = Cast<USizeBox>(ExitButton->GetParent());
+	ExitBox->SetWidthOverride(130.0f);
+	FooterRow->AddChildToHorizontalBox(ExitBox);
+
+	Main->AddChildToVerticalBox(FooterRow)->SetPadding(FMargin(0.0f, 12.0f, 0.0f, 0.0f));
 }
 
 UWidget* UVisionHandMenuWidget::BuildConditionListPage()
@@ -310,6 +324,26 @@ UWidget* UVisionHandMenuWidget::BuildAdjustConditionPage()
 	return Page;
 }
 
+UWidget* UVisionHandMenuWidget::BuildConfirmExitPage()
+{
+	UVerticalBox* Page = WidgetTree->ConstructWidget<UVerticalBox>();
+
+	UTextBlock* Question = MakeText(LOCTEXT("ExitInfo", "The simulator will close. Unsaved settings are lost."), 16, false, TextSecondary);
+	Page->AddChildToVerticalBox(Question);
+
+	Page->AddChildToVerticalBox(WidgetTree->ConstructWidget<USpacer>())->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+
+	// Cancel is the large, safe default; Exit is red. Kept apart so a single touch cannot hit both.
+	UButton* Cancel = MakeButton(LOCTEXT("Cancel", "Cancel"), ButtonHeight, false);
+	Cancel->OnClicked.AddUniqueDynamic(this, &UVisionHandMenuWidget::HandleExitCancelled);
+	Page->AddChildToVerticalBox(Cancel->GetParent())->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 16.0f));
+
+	UButton* Exit = MakeButton(LOCTEXT("ExitConfirm", "Exit"), ButtonHeight, true);
+	Exit->OnClicked.AddUniqueDynamic(this, &UVisionHandMenuWidget::HandleExitConfirmed);
+	Page->AddChildToVerticalBox(Exit->GetParent());
+	return Page;
+}
+
 void UVisionHandMenuWidget::NativeOnMenuRefresh(EVisionMenuPage Page)
 {
 	if (!PageSwitcher)
@@ -319,9 +353,19 @@ void UVisionHandMenuWidget::NativeOnMenuRefresh(EVisionMenuPage Page)
 
 	PageSwitcher->SetActiveWidgetIndex(static_cast<int32>(Page));
 
-	StatusText->SetText(Page == EVisionMenuPage::ConditionList
-		? LOCTEXT("ChooseCondition", "Choose a condition")
-		: GetConditionName());
+	switch (Page)
+	{
+	case EVisionMenuPage::ConditionList:
+		StatusText->SetText(LOCTEXT("ChooseCondition", "Choose a condition"));
+		break;
+	case EVisionMenuPage::ConfirmExit:
+		StatusText->SetText(LOCTEXT("ExitQuestion", "Exit the app?"));
+		break;
+	default:
+		StatusText->SetText(GetConditionName());
+		break;
+	}
+	Footer->SetVisibility(Page == EVisionMenuPage::ConfirmExit ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
 	ActiveDescriptionText->SetText(GetConditionDescription());
 	AdjustDescriptionText->SetText(GetConditionDescription());
 
@@ -371,6 +415,21 @@ void UVisionHandMenuWidget::StepSlider(float Direction)
 void UVisionHandMenuWidget::HandleCompareClicked()
 {
 	ToggleCompareMode();
+}
+
+void UVisionHandMenuWidget::HandleExitClicked()
+{
+	RequestExit();
+}
+
+void UVisionHandMenuWidget::HandleExitConfirmed()
+{
+	ConfirmExit();
+}
+
+void UVisionHandMenuWidget::HandleExitCancelled()
+{
+	CancelExit();
 }
 
 void UVisionHandMenuWidget::HandleSliderChanged(float Value)

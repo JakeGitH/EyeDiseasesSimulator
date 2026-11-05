@@ -1,6 +1,8 @@
 #include "VisionMenuWidget.h"
 
 #include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
+#include "Kismet/KismetSystemLibrary.h"
 #include "VisionConditionLibrary.h"
 #include "VisionSimulatorSubsystem.h"
 
@@ -109,8 +111,35 @@ EVisionCondition UVisionMenuWidget::GetCondition() const
 	return Simulator ? Simulator->GetCondition() : EVisionCondition::None;
 }
 
+void UVisionMenuWidget::RequestExit()
+{
+	bExitConfirmPending = true;
+	RefreshMenu();
+}
+
+void UVisionMenuWidget::CancelExit()
+{
+	bExitConfirmPending = false;
+	RefreshMenu();
+}
+
+void UVisionMenuWidget::ConfirmExit()
+{
+	if (!bExitConfirmPending)
+	{
+		return;
+	}
+	const UWorld* World = GetWorld();
+	APlayerController* PlayerController = World ? World->GetFirstPlayerController() : nullptr;
+	UKismetSystemLibrary::QuitGame(this, PlayerController, EQuitPreference::Quit, false);
+}
+
 EVisionMenuPage UVisionMenuWidget::GetPage() const
 {
+	if (bExitConfirmPending)
+	{
+		return EVisionMenuPage::ConfirmExit;
+	}
 	const EVisionCondition Condition = GetCondition();
 	if (Condition == EVisionCondition::None)
 	{

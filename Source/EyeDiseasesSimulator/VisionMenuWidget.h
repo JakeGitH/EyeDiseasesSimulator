@@ -7,7 +7,7 @@
 
 class UVisionSimulatorSubsystem;
 
-/** Page the hand menu shows; matches the child order of a Widget Switcher in WBP_HandMenu. */
+/** Page the hand menu shows; matches the child order of the menu's widget switcher. */
 UENUM(BlueprintType)
 enum class EVisionMenuPage : uint8
 {
@@ -16,7 +16,9 @@ enum class EVisionMenuPage : uint8
 	/** A condition without adjustable value is active: name, description and the Back button only. */
 	ActiveCondition,
 	/** Myopia / hyperopia / presbyopia: slider (diopters or age), sharp range info and the Back button. */
-	AdjustCondition
+	AdjustCondition,
+	/** "Exit the app?" with Cancel / Exit, shown after the Exit button. */
+	ConfirmExit
 };
 
 /**
@@ -53,6 +55,18 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Vision Menu")
 	void ToggleCompareMode();
+
+	/** Exit button: shows the confirmation page instead of quitting right away. */
+	UFUNCTION(BlueprintCallable, Category = "Vision Menu")
+	void RequestExit();
+
+	/** Confirmation page: quits the application. */
+	UFUNCTION(BlueprintCallable, Category = "Vision Menu")
+	void ConfirmExit();
+
+	/** Confirmation page: back to the previous page. */
+	UFUNCTION(BlueprintCallable, Category = "Vision Menu")
+	void CancelExit();
 
 	UFUNCTION(BlueprintPure, Category = "Vision Menu")
 	EVisionMenuPage GetPage() const;
@@ -108,8 +122,9 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Vision Menu")
 	float MinAge = 40.0f;
 
+	/** Above ~62 years the accommodation amplitude (Hofstetter) is 0, so older ages look the same. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Vision Menu")
-	float MaxAge = 75.0f;
+	float MaxAge = 65.0f;
 
 	/** Slider ends shown in the menu; the subsystem accepts up to -20 / +10 D. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Vision Menu")
@@ -123,4 +138,6 @@ private:
 
 	UFUNCTION()
 	void HandleSettingsChanged(const FVisionSettings& Settings);
+
+	bool bExitConfirmPending = false;
 };

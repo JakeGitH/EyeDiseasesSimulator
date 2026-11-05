@@ -41,7 +41,8 @@ private:
  *   |  0 ConditionList   2x6 grid of condition tiles
  *   |  1 ActiveCondition description + Back
  *   |  2 AdjustCondition value, [-] slider [+], sharp range, description + Back
- *   | [ Compare: OFF ]           |  footer
+ *   |  3 ConfirmExit     "Exit the app?" [Cancel] [Exit]
+ *   | [ Compare: OFF ] [ Exit ]  |  footer (hidden on the confirmation page)
  *   +----------------------------+
  *
  * Size: MenuSize pixels; the hand menu actor's DrawSize should match.
@@ -65,6 +66,7 @@ private:
 	UWidget* BuildConditionListPage();
 	UWidget* BuildActiveConditionPage();
 	UWidget* BuildAdjustConditionPage();
+	UWidget* BuildConfirmExitPage();
 
 	UButton* MakeButton(const FText& Label, float Height, bool bDanger, UTextBlock** OutLabel = nullptr);
 	UTextBlock* MakeText(const FText& Text, int32 Size, bool bBold, const FLinearColor& Color);
@@ -80,6 +82,15 @@ private:
 
 	UFUNCTION()
 	void HandleCompareClicked();
+
+	UFUNCTION()
+	void HandleExitClicked();
+
+	UFUNCTION()
+	void HandleExitConfirmed();
+
+	UFUNCTION()
+	void HandleExitCancelled();
 
 	UFUNCTION()
 	void HandleSliderChanged(float Value);
@@ -115,4 +126,8 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> CompareText;
+
+	/** Compare + Exit row, hidden on the exit confirmation page. */
+	UPROPERTY(Transient)
+	TObjectPtr<UWidget> Footer;
 };

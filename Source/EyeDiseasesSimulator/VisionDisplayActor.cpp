@@ -37,10 +37,12 @@ namespace
 		TEXT("Pupil diameter (mm) of the simulated eye. Blur circle = pupil * defocus; typical indoor value 4-6 mm."),
 		ECVF_Default);
 
+	// The passthrough camera and the headset display already lose fine detail (roughly 20/40 acuity),
+	// so the physically correct blur of a few diopters is barely visible on top of it. 2 compensates for that.
 	TAutoConsoleVariable<float> CVarDefocusScale(
 		TEXT("vision.DefocusScale"),
-		1.0f,
-		TEXT("Multiplier of the physically based defocus blur (1 = no exaggeration)."),
+		2.0f,
+		TEXT("Multiplier of the physically based defocus blur (1 = physical, default 2 compensates the camera/display resolution)."),
 		ECVF_Default);
 
 	TAutoConsoleVariable<int32> CVarDebugView(

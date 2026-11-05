@@ -90,8 +90,9 @@ Przyciski wciska się palcem wskazującym prawej dłoni (poke) albo promieniem (
 - **Lista schorzeń**: wybranie schorzenia włącza je i zmienia stronę menu, więc przypadkowe dotknięcie nie przełączy na inne.
 - **Back**: wyłącza schorzenie i wraca do listy.
 - **Krótkowzroczność / dalekowzroczność**: suwak w dioptriach (−10…−0.25 D / +0.25…+6 D) oraz informacja, w jakim zakresie odległości obraz jest ostry.
-- **Prezbiopia**: suwak wieku (40–75 lat).
-- **Porównanie** (opcjonalnie w menu): lewa połowa obrazu bez zmian, prawa przetworzona.
+- **Prezbiopia**: suwak wieku (40–65 lat; powyżej ~62 lat akomodacja wg Hofstettera wynosi 0).
+- **Compare** (stopka menu): lewa połowa obrazu bez zmian, prawa przetworzona.
+- **Exit** (stopka menu): pyta o potwierdzenie (Cancel / Exit), dopiero potem zamyka aplikację.
 
 Menu (układ i styl) jest zbudowane w C++: `UVisionHandMenuWidget`. Opcjonalnie `Content/VisionSim/UI/BP_HandMenu` (rodzic: `HandMenuActor`) do ustawienia przesunięć w edytorze lub podmiany widgetu.
 
@@ -101,7 +102,7 @@ Menu (układ i styl) jest zbudowane w C++: `UVisionHandMenuWidget`. Opcjonalnie 
 |---|---|---|
 | `vision.AutoCycleSeconds` | 0 | automatyczne przełączanie schorzeń co N s (demo bez menu) |
 | `vision.PupilDiameterMm` | 5 | średnica źrenicy, skaluje rozmycie wad refrakcji |
-| `vision.DefocusScale` | 1 | dodatkowy mnożnik rozmycia (1 = fizycznie) |
+| `vision.DefocusScale` | 2 | mnożnik rozmycia (1 = fizycznie; 2 kompensuje rozdzielczość kamery i wyświetlacza) |
 | `vision.DebugView` | 0 | 1 = mapa głębi, 2 = sigma rozmycia (do dokumentacji) |
 | `vision.Depth.RaysPerFrame` | 300 | liczba raycastów głębi na klatkę |
 | `vision.Depth.FallbackDistance` | 2 | odległość [m] przyjmowana bez danych o głębi |
