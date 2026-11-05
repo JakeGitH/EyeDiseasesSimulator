@@ -82,6 +82,8 @@ Najważniejsze pliki:
 4. Spakuj projekt na Androida (*Platforms → Android → Package Project*) i zainstaluj APK na goglach.
 5. Przy pierwszym uruchomieniu zezwól aplikacji na dostęp do kamery gogli i do danych przestrzennych (potrzebne do głębi).
 
+Boundary (Guardian) jest wyłączony: `bBoundaryVisibilitySupportEnabled` + `bDefaultBoundaryVisibilitySuppressed` w `Config/DefaultEngine.ini` (Meta XR: Boundary Visibility API, działa tylko przy aktywnym passthrough). Można chodzić poza wyznaczony obszar bez przerywania aplikacji.
+
 ## Sterowanie
 
 Aplikacja startuje z normalnym obrazem. **Menu przy lewej dłoni** pojawia się, gdy obrócisz wnętrze dłoni do twarzy i na nią spojrzysz.
